@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package aperture.v1;
+
+// Tenant identity is taken from metadata (x-tenant-id), never from the body.
+service Gateway {
+  rpc Authenticate(AuthRequest) returns (AuthResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc StreamTokens(TokenStreamRequest) returns (stream TokenChunk);
+  rpc ToolRoundTrip(stream ToolMessage) returns (stream ToolMessage);
+}
+
+message AuthRequest {
+  // Demo tenant key. OAuth/SSO is simulated.
+  string tenant_key = 1;
+}
+
+message AuthResponse {
+  string access_token = 1;
+  string tenant_id = 2;
+  string tenant_slug = 3;
+}
+
+message SearchRequest {
+  string query = 1;
+  uint32 top_k = 2;
+}
+
+message Citation {
+  string document_id = 1;
+  string title = 2;
+  string snippet = 3;
+  string tenant_id = 4;
+}
+
+message SearchResponse {
+  repeated Citation hits = 1;
+}
+
+message TokenStreamRequest {
+  string query = 1;
+}
+
+message TokenChunk {
+  string text = 1;
+  bool done = 2;
+}
+
+message ToolMessage {
+  string name = 1;
+  string payload_json = 2;
+}

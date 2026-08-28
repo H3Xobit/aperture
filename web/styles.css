@@ -1,0 +1,78 @@
+:root {
+  --bg: #0b0d12;
+  --card: #141820;
+  --line: #232a36;
+  --text: #e8edf5;
+  --muted: #8b95a8;
+  --teal: #3d8f8a;
+  --danger: #c45c5c;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { min-height: 100vh; }
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 28px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 650; letter-spacing: 0.04em; }
+.meta { color: var(--muted); font-size: 13px; }
+
+main {
+  display: grid;
+  grid-template-columns: 220px 1fr 320px;
+  gap: 16px;
+  padding: 20px 28px 40px;
+}
+@media (max-width: 960px) {
+  main { grid-template-columns: 1fr; }
+}
+
+aside, section, .panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+}
+nav button, .tenant button, button.run {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+nav button.active, .tenant button.active { border-color: var(--teal); color: #d7f3f0; }
+label { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 6px; }
+input {
+  width: 100%;
+  background: #0b0d12;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+button.run {
+  margin-top: 14px;
+  background: #1a3a38;
+  border-color: var(--teal);
+  text-align: center;
+}
+.hits { list-style: none; padding: 0; margin: 16px 0 0; }
+.hits li {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+.hits h3 { margin: 0 0 6px; font-size: 14px; }
+.hits p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.err { color: var(--danger); font-size: 13px; }
+.stream { white-space: pre-wrap; color: var(--muted); font-size: 13px; line-height: 1.5; min-height: 8em; }

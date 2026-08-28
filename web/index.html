@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aperture</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">Aperture</div>
+    <div class="meta" id="status">gateway idle</div>
+  </header>
+  <main>
+    <aside>
+      <nav>
+        <button class="active" type="button">Overview</button>
+        <button type="button" disabled>Connectors</button>
+        <button type="button" disabled>Collections</button>
+        <button type="button" disabled>Traces</button>
+      </nav>
+      <p class="meta">Connectors and traces are shown as product direction. Search below is live against the local gateway.</p>
+    </aside>
+    <section>
+      <h1>Tenant isolation</h1>
+      <p class="meta">Same query, two tenants. Citations must never cross the boundary.</p>
+      <div class="tenant" id="tenants"></div>
+      <label for="query">Query</label>
+      <input id="query" value="forecast" />
+      <button class="run" id="run" type="button">Search</button>
+      <p class="err" id="error"></p>
+      <ul class="hits" id="hits"></ul>
+    </section>
+    <div class="panel">
+      <h2>Stream</h2>
+      <p class="meta">Server-streamed tokens for the active tenant only.</p>
+      <div class="stream" id="stream">Switch tenant, then search.</div>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

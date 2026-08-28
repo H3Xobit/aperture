@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aperture-gateway
+  labels:
+    app: aperture-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aperture-gateway
+  template:
+    metadata:
+      labels:
+        app: aperture-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: aperture-gateway:dev
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 50051
+          env:
+            - name: APERTURE_HTTP
+              value: "0.0.0.0:8080"
+            - name: APERTURE_GRPC
+              value: "0.0.0.0:50051"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aperture-gateway
+spec:
+  selector:
+    app: aperture-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: grpc
+      port: 50051
+      targetPort: grpc

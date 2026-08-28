@@ -1,0 +1,30 @@
+[package]
+name = "aperture-gateway"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Aperture gRPC and HTTP gateway"
+publish = false
+
+[[bin]]
+name = "aperture-gateway"
+path = "src/main.rs"
+
+[dependencies]
+aperture-limiter-sys = { path = "../limiter-sys" }
+async-stream = "0.3"
+axum = "0.7"
+prost = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tonic = "0.12"
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"

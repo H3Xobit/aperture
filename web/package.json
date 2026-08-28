@@ -1,0 +1,9 @@
+{
+  "name": "aperture-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Aperture operator console",
+  "scripts": {
+    "typecheck": "tsc --noEmit --pretty false web/src/main.ts"
+  }
+}

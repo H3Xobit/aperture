@@ -1,0 +1,181 @@
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use aperture_gateway::auth::AuthRegistry;
+use aperture_gateway::proto::gateway_server::GatewayServer;
+use aperture_gateway::search::CollectionStore;
+use aperture_gateway::service::GatewayService;
+use aperture_gateway::Limiter;
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
+use tracing_subscriber::EnvFilter;
+
+#[derive(Clone)]
+struct AppState {
+    auth: AuthRegistry,
+    store: CollectionStore,
+    limiter: Arc<Limiter>,
+}
+
+#[derive(Deserialize)]
+struct AuthBody {
+    tenant_key: String,
+}
+
+#[derive(Serialize)]
+struct AuthOut {
+    access_token: String,
+    tenant_id: String,
+    tenant_slug: String,
+}
+
+#[derive(Deserialize)]
+struct SearchBody {
+    query: String,
+    top_k: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+}
+
+fn tenant_from_headers(headers: &HeaderMap) -> Result<String, StatusCode> {
+    if let Some(v) = headers.get("x-tenant-id").and_then(|v| v.to_str().ok()) {
+        let t = v.trim();
+        if !t.is_empty() {
+            return Ok(t.to_string());
+        }
+    }
+    if let Some(v) = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        let t = v.trim();
+        if !t.is_empty() {
+            return Ok(t.to_string());
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED)
+}
+
+async fn healthz() -> &'static str {
+    "ok\n"
+}
+
+async fn auth_handler(
+    State(st): State<AppState>,
+    Json(body): Json<AuthBody>,
+) -> impl IntoResponse {
+    match st.auth.authenticate(&body.tenant_key) {
+        Some(t) => Json(AuthOut {
+            access_token: t.id.clone(),
+            tenant_id: t.id.clone(),
+            tenant_slug: t.slug.clone(),
+        })
+        .into_response(),
+        None => (StatusCode::UNAUTHORIZED, "unknown tenant key").into_response(),
+    }
+}
+
+async fn search(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SearchBody>,
+) -> impl IntoResponse {
+    let tenant = match tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(code) => return code.into_response(),
+    };
+    if !st.auth.known_tenant(&tenant) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match st.limiter.allow(&tenant, 1) {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::TOO_MANY_REQUESTS.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+    let k = body.top_k.unwrap_or(5) as usize;
+    Json(st.store.search(&tenant, &body.query, k)).into_response()
+}
+
+async fn search_get(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<SearchQuery>,
+) -> impl IntoResponse {
+    let body = SearchBody {
+        query: q.q.unwrap_or_default(),
+        top_k: Some(5),
+    };
+    search(State(st), headers, Json(body)).await
+}
+
+fn web_dir() -> PathBuf {
+    std::env::var("APERTURE_WEB")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("web"))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
+        .init();
+
+    let limiter = Limiter::new(40, 10.0)?;
+    let auth_reg = AuthRegistry::demo();
+    let store = CollectionStore::demo();
+    let svc = GatewayService {
+        auth: auth_reg.clone(),
+        store: store.clone(),
+        limiter: limiter.clone(),
+    };
+    let http_state = AppState {
+        auth: auth_reg,
+        store,
+        limiter,
+    };
+
+    let grpc_addr: SocketAddr = std::env::var("APERTURE_GRPC")
+        .unwrap_or_else(|_| "0.0.0.0:50051".into())
+        .parse()?;
+    let http_addr: SocketAddr = std::env::var("APERTURE_HTTP")
+        .unwrap_or_else(|_| "0.0.0.0:8080".into())
+        .parse()?;
+
+    let grpc = tonic::transport::Server::builder()
+        .add_service(GatewayServer::new(svc))
+        .serve(grpc_addr);
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    let static_files = ServeDir::new(web_dir()).append_index_html_on_directories(true);
+    let app = Router::new()
+        .route("/healthz", get(healthz))
+        .route("/v1/auth", post(auth_handler))
+        .route("/v1/search", post(search).get(search_get))
+        .fallback_service(static_files)
+        .layer(cors)
+        .with_state(http_state);
+
+    let listener = tokio::net::TcpListener::bind(http_addr).await?;
+    tracing::info!(%grpc_addr, %http_addr, "aperture gateway");
+
+    tokio::select! {
+        r = grpc => r?,
+        r = axum::serve(listener, app) => r?,
+    }
+    Ok(())
+}

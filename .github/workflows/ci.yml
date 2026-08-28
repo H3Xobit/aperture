@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: C++ limiter
+        run: make -C cpp/limiter test
+      - name: Rust workspace
+        run: cargo test --workspace
+      - name: Python chunker
+        run: python3 -m unittest discover -s python/embed -p "test_*.py" -q
