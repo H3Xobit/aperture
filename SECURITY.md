@@ -8,7 +8,9 @@ The tokens in this repository (`acme-demo-key`, `northwind-demo-key`) are public
 
 ## What isolation actually enforces
 
-Collection search is tenant-scoped in the gateway process. PostgreSQL row-level security and ClickHouse row policies are in `sql/` and are the next slice. Until those are wired, do not treat this tree as a multi-tenant production control plane.
+When `APERTURE_DATABASE_URL` points at `aperture_app`, Search opens a transaction, calls `set_config('app.tenant_id', $1, true)`, and reads `documents` with no application `WHERE tenant_id`. RLS plus `FORCE ROW LEVEL SECURITY` is the isolation boundary. The compose superuser bypasses RLS; do not point the gateway at that role.
+
+If Postgres is unset or down, Search falls back to the in-process store. ClickHouse row policies are not wired yet.
 
 ## Secrets
 

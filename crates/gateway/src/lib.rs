@@ -3,6 +3,7 @@ pub mod proto {
 }
 
 pub mod auth;
+pub mod postgres;
 pub mod search;
 pub mod service;
 

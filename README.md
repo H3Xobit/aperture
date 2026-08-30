@@ -2,7 +2,7 @@
 
 Multi-tenant enterprise agent gateway. Aperture sits in front of connectors, collections, and tools. It authenticates a tenant, rate-limits the hot path in C++, searches only that tenant's documents, streams an answer, and records tool round-trips. The operator console is a desk for isolation, not a chatbot toy.
 
-The screenshots below are the target product. The tree in this repository is the first working slice: proto, gRPC, REST, the C++ limiter, in-process tenant search, and a live console against two demo orgs.
+The screenshots below are the target product. This slice adds Postgres RLS on Search. Memory remains the fallback when the database is unset or down.
 
 ## Operator desk
 
@@ -14,7 +14,7 @@ Same query, two tenants. Citations stay inside the active org.
 
 ![Connectors](docs/screenshots/connectors.png)
 
-Drive, SharePoint, and a collection used as the retrieval surface. Connector OAuth is simulated. Tenant-scoped search is real in this slice (in-process). PostgreSQL RLS is the next wiring.
+Drive, SharePoint, and a collection used as the retrieval surface. Connector OAuth is simulated. Collection search is real: Postgres RLS when `APERTURE_DATABASE_URL` is set, otherwise the in-process store.
 
 ## Traces
 
@@ -25,21 +25,21 @@ Target span tree for one agent request: auth, tenant resolve, C++ rate limit, RL
 ## What works today
 
 1. `Authenticate` (gRPC unary and `POST /v1/auth`) maps a demo tenant key to a tenant id. This is not SSO.
-2. `Search` is scoped by `x-tenant-id`. Acme never receives Northwind documents. Tests encode that invariant.
+2. `Search` is scoped by `x-tenant-id`. When Postgres is up the gateway role is `aperture_app` (no `BYPASSRLS`). Each request runs `SELECT set_config('app.tenant_id', $1, true)` inside a transaction. The SQL does not add `WHERE tenant_id`. Acme never receives Northwind documents. Tests encode that invariant both in memory and against RLS.
 3. `StreamTokens` is a server stream. `ToolRoundTrip` is bidi; `drive.list` returns only that tenant's files.
 4. The C++ token-bucket limiter is linked into the Rust gateway over a C ABI. Buckets are per tenant.
-5. Postgres and ClickHouse schemas live in `sql/` and start from Compose. The gateway does not query them yet.
+5. ClickHouse schema lives in `sql/` and starts from Compose. Ingest is not wired yet.
 6. `python/embed` chunks text. Embeddings are not written anywhere yet.
 
 ## Simulated vs real
 
 | Piece | Status |
 | --- | --- |
-| Tenant-scoped search | Real (in-process store, tested) |
+| Tenant-scoped search | Real (Postgres RLS when configured; memory fallback) |
 | C++ token-bucket limiter | Real (C++ tests + Rust FFI tests) |
 | gRPC unary, server stream, bidi | Real (tonic) |
 | REST mapping for the desk | Real (axum) |
-| Postgres RLS schema | Present, not wired to Search |
+| Postgres RLS on Search | Real (`set_config` is_local, `aperture_app`, FORCE RLS) |
 | ClickHouse `ORDER BY (tenant_id, …)` | Present, not wired to ingest |
 | OAuth / SSO / SCIM | Simulated demo keys |
 | Vault / CMEK | Out of scope |
@@ -84,7 +84,17 @@ curl -s http://localhost:8080/v1/search \
   -d '{"query":"forecast","top_k":5}'
 ```
 
-Optional databases:
+Optional Postgres (RLS path):
+
+```bash
+docker compose up -d postgres
+export APERTURE_DATABASE_URL=postgres://aperture_app:aperture_app@127.0.0.1:5432/aperture
+make run
+```
+
+Copy `.env.example` if you want the same values in a local file. Do not commit `.env`.
+
+ClickHouse is still schema-only:
 
 ```bash
 docker compose up -d
@@ -101,7 +111,7 @@ docker compose up -d
 
 ## Isolation rule
 
-A search for tenant A must not return a document, title, or snippet owned by tenant B. That check is in `crates/gateway/src/search.rs` and in the desk (`web/app.js`). Wiring the same rule through Postgres RLS is the next slice.
+A search for tenant A must not return a document, title, or snippet owned by tenant B. Memory tests live in `crates/gateway/src/search.rs`. RLS tests live in `crates/gateway/tests/rls.rs` and run when `APERTURE_DATABASE_URL` is set (CI always sets it). The desk (`web/app.js`) rejects a foreign `tenant_id` in the response.
 
 ## Out of scope
 

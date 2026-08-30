@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use aperture_gateway::auth::AuthRegistry;
 use aperture_gateway::proto::gateway_server::GatewayServer;
+use aperture_gateway::postgres::SearchIndex;
 use aperture_gateway::search::CollectionStore;
 use aperture_gateway::service::GatewayService;
 use aperture_gateway::Limiter;
@@ -20,7 +21,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Clone)]
 struct AppState {
     auth: AuthRegistry,
-    store: CollectionStore,
+    store: SearchIndex,
     limiter: Arc<Limiter>,
 }
 
@@ -104,7 +105,7 @@ async fn search(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
     let k = body.top_k.unwrap_or(5) as usize;
-    Json(st.store.search(&tenant, &body.query, k)).into_response()
+    Json(st.store.search(&tenant, &body.query, k).await).into_response()
 }
 
 async fn search_get(
@@ -133,7 +134,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let limiter = Limiter::new(40, 10.0)?;
     let auth_reg = AuthRegistry::demo();
-    let store = CollectionStore::demo();
+    let memory = CollectionStore::demo();
+    let store = match std::env::var("APERTURE_DATABASE_URL") {
+        Ok(url) => match SearchIndex::connect(&url, memory.clone()).await {
+            Ok(idx) => {
+                tracing::info!("search reads postgres under RLS");
+                idx
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "postgres unavailable; search uses memory");
+                SearchIndex::memory_only(memory)
+            }
+        },
+        Err(_) => SearchIndex::memory_only(memory),
+    };
     let svc = GatewayService {
         auth: auth_reg.clone(),
         store: store.clone(),

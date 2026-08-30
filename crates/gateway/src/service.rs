@@ -11,12 +11,13 @@ use crate::proto::{
     AuthRequest, AuthResponse, SearchRequest, SearchResponse, TokenChunk, TokenStreamRequest,
     ToolMessage,
 };
-use crate::search::{CollectionStore, Hit};
+use crate::postgres::SearchIndex;
+use crate::search::Hit;
 use crate::Limiter;
 
 pub struct GatewayService {
     pub auth: AuthRegistry,
-    pub store: CollectionStore,
+    pub store: SearchIndex,
     pub limiter: Arc<Limiter>,
 }
 
@@ -81,7 +82,7 @@ impl Gateway for GatewayService {
         rate_limit(&self.limiter, &tenant)?;
         let body = request.into_inner();
         let top_k = if body.top_k == 0 { 5 } else { body.top_k as usize };
-        let hits = self.store.search(&tenant, &body.query, top_k);
+        let hits = self.store.search(&tenant, &body.query, top_k).await;
         Ok(Response::new(hits_to_proto(hits)))
     }
 
@@ -98,7 +99,7 @@ impl Gateway for GatewayService {
         }
         rate_limit(&self.limiter, &tenant)?;
         let query = request.into_inner().query;
-        let hits = self.store.search(&tenant, &query, 3);
+        let hits = self.store.search(&tenant, &query, 3).await;
         let mut answer = if hits.is_empty() {
             format!("No citations for this tenant on {query}.")
         } else {
@@ -152,6 +153,7 @@ impl Gateway for GatewayService {
                     "drive.list" => {
                         let listed: Vec<_> = store
                             .list(&tenant)
+                            .await
                             .into_iter()
                             .map(|h| {
                                 serde_json::json!({

@@ -8,11 +8,34 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aperture
+          POSTGRES_PASSWORD: aperture
+          POSTGRES_DB: aperture
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aperture -d aperture"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APERTURE_DATABASE_URL: postgres://aperture_app:aperture_app@localhost:5432/aperture
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: C++ limiter
         run: make -C cpp/limiter test
+      - name: Apply Postgres schema
+        env:
+          PGPASSWORD: aperture
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          psql -h localhost -U aperture -d aperture -f sql/postgres/001_init.sql
       - name: Rust workspace
         run: cargo test --workspace
       - name: Python chunker

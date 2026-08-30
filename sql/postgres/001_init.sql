@@ -18,6 +18,8 @@ INSERT INTO tenants (id, slug, name) VALUES
     ('11111111-1111-1111-1111-111111111111', 'acme', 'Acme Corp'),
     ('22222222-2222-2222-2222-222222222222', 'northwind', 'Northwind');
 
+CREATE INDEX documents_tenant_id_idx ON documents (tenant_id);
+
 INSERT INTO documents (id, tenant_id, title, body) VALUES
     (
         'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1',
@@ -51,7 +53,7 @@ CREATE POLICY documents_tenant ON documents
     USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
-CREATE ROLE aperture_app LOGIN PASSWORD 'aperture_app';
+CREATE ROLE aperture_app LOGIN PASSWORD 'aperture_app' NOSUPERUSER NOBYPASSRLS;
 GRANT CONNECT ON DATABASE aperture TO aperture_app;
 GRANT USAGE ON SCHEMA public TO aperture_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, documents TO aperture_app;
