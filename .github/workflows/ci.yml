@@ -22,8 +22,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        ports:
+          - 8123:8123
+        options: >-
+          --ulimit nofile=262144:262144
+          --health-cmd "clickhouse-client --query 'SELECT 1' || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
       APERTURE_DATABASE_URL: postgres://aperture_app:aperture_app@localhost:5432/aperture
+      APERTURE_CLICKHOUSE_URL: http://localhost:8123
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -36,6 +47,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq postgresql-client
           psql -h localhost -U aperture -d aperture -f sql/postgres/001_init.sql
+      - name: Apply ClickHouse schema
+        run: curl -sf 'http://localhost:8123/' --data-binary @sql/clickhouse/001_events.sql
       - name: Rust workspace
         run: cargo test --workspace
       - name: Python chunker

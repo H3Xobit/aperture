@@ -14,6 +14,5 @@ PARTITION BY toYYYYMM(event_time)
 ORDER BY (tenant_id, event_time, event_id);
 
 -- tenant_id is first in ORDER BY so per-tenant scans prune granules.
--- Row policy for the app role is applied in a later slice, once the gateway
--- sets a per-query tenant setting. Do not query this table as default if you
--- need isolation.
+-- The gateway binds the authenticated tenant on INSERT and SELECT.
+-- Row policy for a readonly role is a later slice.

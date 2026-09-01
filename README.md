@@ -2,7 +2,7 @@
 
 Multi-tenant enterprise agent gateway. Aperture sits in front of connectors, collections, and tools. It authenticates a tenant, rate-limits the hot path in C++, searches only that tenant's documents, streams an answer, and records tool round-trips. The operator console is a desk for isolation, not a chatbot toy.
 
-The screenshots below are the target product. This slice adds Postgres RLS on Search. Memory remains the fallback when the database is unset or down.
+The screenshots below are the target product. This slice writes Search and ToolRoundTrip events to ClickHouse. Memory remains the Search fallback when Postgres is unset or down. Ingest is skipped when ClickHouse is unset or down.
 
 ## Operator desk
 
@@ -26,9 +26,9 @@ Target span tree for one agent request: auth, tenant resolve, C++ rate limit, RL
 
 1. `Authenticate` (gRPC unary and `POST /v1/auth`) maps a demo tenant key to a tenant id. This is not SSO.
 2. `Search` is scoped by `x-tenant-id`. When Postgres is up the gateway role is `aperture_app` (no `BYPASSRLS`). Each request runs `SELECT set_config('app.tenant_id', $1, true)` inside a transaction. The SQL does not add `WHERE tenant_id`. Acme never receives Northwind documents. Tests encode that invariant both in memory and against RLS.
-3. `StreamTokens` is a server stream. `ToolRoundTrip` is bidi; `drive.list` returns only that tenant's files.
+3. `StreamTokens` is a server stream. `ToolRoundTrip` is bidi; `drive.list` returns only that tenant's files. Each tool call is written to ClickHouse when the audit URL is set.
 4. The C++ token-bucket limiter is linked into the Rust gateway over a C ABI. Buckets are per tenant.
-5. ClickHouse schema lives in `sql/` and starts from Compose. Ingest is not wired yet.
+5. ClickHouse `tool_events` uses `ORDER BY (tenant_id, event_time, event_id)`. Inserts and `GET /v1/events` bind the authenticated tenant. If ClickHouse is down the RPC still succeeds.
 6. `python/embed` chunks text. Embeddings are not written anywhere yet.
 
 ## Simulated vs real
@@ -40,7 +40,7 @@ Target span tree for one agent request: auth, tenant resolve, C++ rate limit, RL
 | gRPC unary, server stream, bidi | Real (tonic) |
 | REST mapping for the desk | Real (axum) |
 | Postgres RLS on Search | Real (`set_config` is_local, `aperture_app`, FORCE RLS) |
-| ClickHouse `ORDER BY (tenant_id, …)` | Present, not wired to ingest |
+| ClickHouse tool events | Real (`ORDER BY tenant_id`, ingest + `GET /v1/events`) |
 | OAuth / SSO / SCIM | Simulated demo keys |
 | Vault / CMEK | Out of scope |
 | OpenTelemetry + Grafana | Documented target, not shipped |
@@ -82,6 +82,9 @@ curl -s http://localhost:8080/v1/search \
   -H 'content-type: application/json' \
   -H 'x-tenant-id: 11111111-1111-1111-1111-111111111111' \
   -d '{"query":"forecast","top_k":5}'
+
+curl -s http://localhost:8080/v1/events \
+  -H 'x-tenant-id: 11111111-1111-1111-1111-111111111111'
 ```
 
 Optional Postgres (RLS path):
@@ -94,10 +97,12 @@ make run
 
 Copy `.env.example` if you want the same values in a local file. Do not commit `.env`.
 
-ClickHouse is still schema-only:
+ClickHouse ingest:
 
 ```bash
-docker compose up -d
+docker compose up -d clickhouse
+export APERTURE_CLICKHOUSE_URL=http://127.0.0.1:8123
+make run
 ```
 
 ## Ports
@@ -111,7 +116,7 @@ docker compose up -d
 
 ## Isolation rule
 
-A search for tenant A must not return a document, title, or snippet owned by tenant B. Memory tests live in `crates/gateway/src/search.rs`. RLS tests live in `crates/gateway/tests/rls.rs` and run when `APERTURE_DATABASE_URL` is set (CI always sets it). The desk (`web/app.js`) rejects a foreign `tenant_id` in the response.
+A search for tenant A must not return a document, title, or snippet owned by tenant B. Memory tests live in `crates/gateway/src/search.rs`. RLS tests live in `crates/gateway/tests/rls.rs` and run when `APERTURE_DATABASE_URL` is set (CI always sets it). ClickHouse event lists are tenant-scoped in `crates/gateway/tests/clickhouse.rs`. The desk (`web/app.js`) rejects a foreign `tenant_id` in the response.
 
 ## Out of scope
 

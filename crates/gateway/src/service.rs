@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::audit::AuditLog;
 use crate::auth::AuthRegistry;
 use crate::proto::gateway_server::Gateway;
 use crate::proto::{
@@ -19,6 +20,7 @@ pub struct GatewayService {
     pub auth: AuthRegistry,
     pub store: SearchIndex,
     pub limiter: Arc<Limiter>,
+    pub audit: AuditLog,
 }
 
 fn tenant_id<T>(req: &Request<T>) -> Result<String, Status> {
@@ -83,6 +85,14 @@ impl Gateway for GatewayService {
         let body = request.into_inner();
         let top_k = if body.top_k == 0 { 5 } else { body.top_k as usize };
         let hits = self.store.search(&tenant, &body.query, top_k).await;
+        self.audit
+            .emit(
+                &tenant,
+                "search",
+                "",
+                &serde_json::json!({ "query": body.query, "hits": hits.len() }).to_string(),
+            )
+            .await;
         Ok(Response::new(hits_to_proto(hits)))
     }
 
@@ -146,6 +156,7 @@ impl Gateway for GatewayService {
         }
         rate_limit(&self.limiter, &tenant)?;
         let store = self.store.clone();
+        let audit = self.audit.clone();
         let mut inbound = request.into_inner();
         let stream = async_stream::try_stream! {
             while let Some(msg) = inbound.message().await? {
@@ -172,6 +183,9 @@ impl Gateway for GatewayService {
                     })
                     .to_string(),
                 };
+                audit
+                    .emit(&tenant, "tool", &msg.name, &payload)
+                    .await;
                 yield ToolMessage {
                     name: msg.name,
                     payload_json: payload,

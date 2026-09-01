@@ -2,6 +2,7 @@ pub mod proto {
     tonic::include_proto!("aperture.v1");
 }
 
+pub mod audit;
 pub mod auth;
 pub mod postgres;
 pub mod search;

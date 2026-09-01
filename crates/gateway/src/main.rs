@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aperture_gateway::audit::AuditLog;
 use aperture_gateway::auth::AuthRegistry;
 use aperture_gateway::proto::gateway_server::GatewayServer;
 use aperture_gateway::postgres::SearchIndex;
@@ -23,6 +24,7 @@ struct AppState {
     auth: AuthRegistry,
     store: SearchIndex,
     limiter: Arc<Limiter>,
+    audit: AuditLog,
 }
 
 #[derive(Deserialize)]
@@ -105,7 +107,35 @@ async fn search(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
     let k = body.top_k.unwrap_or(5) as usize;
-    Json(st.store.search(&tenant, &body.query, k).await).into_response()
+    let hits = st.store.search(&tenant, &body.query, k).await;
+    st.audit
+        .emit(
+            &tenant,
+            "search",
+            "",
+            &serde_json::json!({ "query": body.query, "hits": hits.len() }).to_string(),
+        )
+        .await;
+    Json(hits).into_response()
+}
+
+async fn events(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let tenant = match tenant_from_headers(&headers) {
+        Ok(t) => t,
+        Err(code) => return code.into_response(),
+    };
+    if !st.auth.known_tenant(&tenant) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match st.audit.list_for_tenant(&tenant).await {
+        Ok(rows) => {
+            if rows.iter().any(|e| e.tenant_id != tenant) {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            Json(rows).into_response()
+        }
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "clickhouse unavailable").into_response(),
+    }
 }
 
 async fn search_get(
@@ -148,15 +178,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Err(_) => SearchIndex::memory_only(memory),
     };
+    let audit = match std::env::var("APERTURE_CLICKHOUSE_URL") {
+        Ok(url) => match AuditLog::connect(&url).await {
+            Ok(log) => {
+                tracing::info!("tool events write to clickhouse");
+                log
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "clickhouse unavailable; ingest skipped");
+                AuditLog::disabled()
+            }
+        },
+        Err(_) => AuditLog::disabled(),
+    };
     let svc = GatewayService {
         auth: auth_reg.clone(),
         store: store.clone(),
         limiter: limiter.clone(),
+        audit: audit.clone(),
     };
     let http_state = AppState {
         auth: auth_reg,
         store,
         limiter,
+        audit,
     };
 
     let grpc_addr: SocketAddr = std::env::var("APERTURE_GRPC")
@@ -180,6 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/healthz", get(healthz))
         .route("/v1/auth", post(auth_handler))
         .route("/v1/search", post(search).get(search_get))
+        .route("/v1/events", get(events))
         .fallback_service(static_files)
         .layer(cors)
         .with_state(http_state);
