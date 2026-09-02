@@ -31,3 +31,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.122.1
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4318:4318"

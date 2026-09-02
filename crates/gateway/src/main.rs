@@ -7,7 +7,8 @@ use aperture_gateway::auth::AuthRegistry;
 use aperture_gateway::proto::gateway_server::GatewayServer;
 use aperture_gateway::postgres::SearchIndex;
 use aperture_gateway::search::CollectionStore;
-use aperture_gateway::service::GatewayService;
+use aperture_gateway::service::{GatewayService, SearchError};
+use aperture_gateway::telemetry;
 use aperture_gateway::Limiter;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -17,7 +18,6 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Clone)]
 struct AppState {
@@ -78,14 +78,24 @@ async fn auth_handler(
     State(st): State<AppState>,
     Json(body): Json<AuthBody>,
 ) -> impl IntoResponse {
-    match st.auth.authenticate(&body.tenant_key) {
-        Some(t) => Json(AuthOut {
-            access_token: t.id.clone(),
-            tenant_id: t.id.clone(),
-            tenant_slug: t.slug.clone(),
+    let svc = gateway(&st);
+    match svc.authenticate_key(&body.tenant_key) {
+        Some((id, slug, token)) => Json(AuthOut {
+            access_token: token,
+            tenant_id: id,
+            tenant_slug: slug,
         })
         .into_response(),
         None => (StatusCode::UNAUTHORIZED, "unknown tenant key").into_response(),
+    }
+}
+
+fn gateway(st: &AppState) -> GatewayService {
+    GatewayService {
+        auth: st.auth.clone(),
+        store: st.store.clone(),
+        limiter: st.limiter.clone(),
+        audit: st.audit.clone(),
     }
 }
 
@@ -98,25 +108,14 @@ async fn search(
         Ok(t) => t,
         Err(code) => return code.into_response(),
     };
-    if !st.auth.known_tenant(&tenant) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    match st.limiter.allow(&tenant, 1) {
-        Ok(true) => {}
-        Ok(false) => return StatusCode::TOO_MANY_REQUESTS.into_response(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    let svc = gateway(&st);
     let k = body.top_k.unwrap_or(5) as usize;
-    let hits = st.store.search(&tenant, &body.query, k).await;
-    st.audit
-        .emit(
-            &tenant,
-            "search",
-            "",
-            &serde_json::json!({ "query": body.query, "hits": hits.len() }).to_string(),
-        )
-        .await;
-    Json(hits).into_response()
+    match svc.search_docs(&tenant, &body.query, k).await {
+        Ok(hits) => Json(hits).into_response(),
+        Err(SearchError::UnknownTenant) => StatusCode::FORBIDDEN.into_response(),
+        Err(SearchError::RateLimited) => StatusCode::TOO_MANY_REQUESTS.into_response(),
+        Err(SearchError::Internal(_)) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn events(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
@@ -158,9 +157,7 @@ fn web_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
-        .init();
+    telemetry::install();
 
     let limiter = Limiter::new(40, 10.0)?;
     let auth_reg = AuthRegistry::demo();

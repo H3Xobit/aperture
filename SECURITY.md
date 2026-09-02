@@ -14,6 +14,8 @@ If Postgres is unset or down, Search falls back to the in-process store.
 
 When `APERTURE_CLICKHOUSE_URL` is set, Search and ToolRoundTrip insert into `aperture.tool_events`. The tenant column is the authenticated tenant, never a payload field. `GET /v1/events` lists only that tenant. If ClickHouse is down, the RPC still succeeds.
 
+When `APERTURE_OTLP_URL` is set, spans export over OTLP HTTP. Export is batched with a two-second timeout. If the collector is down, the RPC still succeeds.
+
 ## Secrets
 
 Do not commit `.env`, cloud keys, or customer connector tokens. Compose defaults are local-only passwords.

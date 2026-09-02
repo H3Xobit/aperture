@@ -1,7 +1,9 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
+use tracing::Instrument;
 
 use crate::search::{CollectionStore, Hit};
+use crate::spans;
 
 /// In-process store plus optional Postgres. Search SQL does not filter
 /// `tenant_id`; RLS does. Memory is used when the pool is missing or down.
@@ -44,13 +46,23 @@ impl SearchIndex {
     }
 
     pub async fn search(&self, tenant_id: &str, query: &str, top_k: usize) -> Vec<Hit> {
-        if self.pool.is_some() {
-            match self.search_pg(tenant_id, query, top_k).await {
-                Ok(hits) => return hits,
-                Err(e) => tracing::warn!(error = %e, "postgres search failed; using memory"),
+        async {
+            if self.pool.is_some() {
+                match self
+                    .search_pg(tenant_id, query, top_k)
+                    .instrument(tracing::info_span!(spans::POSTGRES_RLS))
+                    .await
+                {
+                    Ok(hits) => return hits,
+                    Err(e) => tracing::warn!(error = %e, "postgres search failed; using memory"),
+                }
             }
+            async { self.memory.search(tenant_id, query, top_k) }
+                .instrument(tracing::info_span!(spans::MEMORY_SEARCH))
+                .await
         }
-        self.memory.search(tenant_id, query, top_k)
+        .instrument(tracing::info_span!(spans::COLLECTION_SEARCH))
+        .await
     }
 
     pub async fn list(&self, tenant_id: &str) -> Vec<Hit> {
