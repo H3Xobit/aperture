@@ -9,7 +9,7 @@ rust:
 	cargo test --workspace
 
 python:
-	cd python/embed && python3 -m unittest test_chunker.py -q
+	cd python/embed && python3 -m unittest discover -s . -p "test_*.py" -q
 
 run:
 	APERTURE_WEB=web cargo run -p aperture-gateway

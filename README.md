@@ -25,7 +25,7 @@ Target span tree for one agent request: Auth, TenantResolve, RateLimit, Postgres
 ## What works today
 
 1. `Authenticate` (gRPC unary and `POST /v1/auth`) maps a demo tenant key to a tenant id. This is not SSO.
-2. `Search` is scoped by `x-tenant-id`. When Postgres is up the gateway role is `aperture_app` (no `BYPASSRLS`). Each request runs `SELECT set_config('app.tenant_id', $1, true)` inside a transaction. The SQL does not add `WHERE tenant_id`. Acme never receives Northwind documents. Tests encode that invariant both in memory and against RLS.
+2. `Search` is scoped by `x-tenant-id`. When Postgres is up the gateway role is `aperture_app` (no `BYPASSRLS`). Each request runs `SELECT set_config('app.tenant_id', $1, true)` inside a transaction. The SQL does not add `WHERE tenant_id`. If that tenant has `document_chunks` rows, snippets come from those rows. An empty or missing chunk table still searches `documents`. If Postgres is down, Search uses the in-process store. Acme never receives Northwind documents or chunks. Tests encode that invariant both in memory and against RLS.
 3. `StreamTokens` is a server stream. `ToolRoundTrip` is bidi; `drive.list` returns only that tenant's files. Each tool call is written to ClickHouse when the audit URL is set.
 4. The C++ token-bucket limiter is linked into the Rust gateway over a C ABI. Buckets are per tenant.
 5. ClickHouse `tool_events` uses `ORDER BY (tenant_id, event_time, event_id)`. Inserts and `GET /v1/events` bind the authenticated tenant. If ClickHouse is down the RPC still succeeds.
@@ -36,7 +36,7 @@ Target span tree for one agent request: Auth, TenantResolve, RateLimit, Postgres
 
 | Piece | Status |
 | --- | --- |
-| Tenant-scoped search | Real (Postgres RLS when configured; memory fallback) |
+| Tenant-scoped search | Real (chunk rows when present, else documents; memory fallback) |
 | C++ token-bucket limiter | Real (C++ tests + Rust FFI tests) |
 | gRPC unary, server stream, bidi | Real (tonic) |
 | REST mapping for the desk | Real (axum) |
