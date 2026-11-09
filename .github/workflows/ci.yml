@@ -52,4 +52,6 @@ jobs:
       - name: Rust workspace
         run: cargo test --workspace
       - name: Python chunker
-        run: python3 -m unittest discover -s python/embed -p "test_*.py" -q
+        run: |
+          python3 -m pip install --disable-pip-version-check -q -r python/embed/requirements.txt
+          python3 -m unittest discover -s python/embed -p "test_*.py" -q

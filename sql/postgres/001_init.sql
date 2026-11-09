@@ -53,7 +53,28 @@ CREATE POLICY documents_tenant ON documents
     USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
+-- Overlapping slices of documents, one row per chunk. The embed worker inserts
+-- them. Policies match documents: the tenant GUC is the only filter.
+CREATE TABLE document_chunks (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants (id),
+    document_id uuid NOT NULL REFERENCES documents (id),
+    chunk_index integer NOT NULL,
+    title text NOT NULL,
+    body text NOT NULL,
+    UNIQUE (document_id, chunk_index)
+);
+
+CREATE INDEX document_chunks_tenant_id_idx ON document_chunks (tenant_id);
+
+ALTER TABLE document_chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_chunks FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY document_chunks_tenant ON document_chunks
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+
 CREATE ROLE aperture_app LOGIN PASSWORD 'aperture_app' NOSUPERUSER NOBYPASSRLS;
 GRANT CONNECT ON DATABASE aperture TO aperture_app;
 GRANT USAGE ON SCHEMA public TO aperture_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, documents TO aperture_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, documents, document_chunks TO aperture_app;

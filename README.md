@@ -30,7 +30,7 @@ Target span tree for one agent request: Auth, TenantResolve, RateLimit, Postgres
 4. The C++ token-bucket limiter is linked into the Rust gateway over a C ABI. Buckets are per tenant.
 5. ClickHouse `tool_events` uses `ORDER BY (tenant_id, event_time, event_id)`. Inserts and `GET /v1/events` bind the authenticated tenant. If ClickHouse is down the RPC still succeeds.
 6. Search, auth, rate limit, tool, and audit steps emit named spans. `APERTURE_OTLP_URL` sends them over OTLP HTTP. If the collector is down the RPC still succeeds.
-7. `python/embed` chunks text. Embeddings are not written anywhere yet.
+7. `python/embed` chunks the four demo documents. When `APERTURE_DATABASE_URL` is set, the worker inserts `document_chunks` under the same transaction-local tenant GUC as Search. Embeddings are not computed yet.
 
 ## Simulated vs real
 
