@@ -141,3 +141,62 @@ async fn northwind_read_never_returns_acme_chunks() {
         .await
         .expect("clear northwind chunks");
 }
+
+#[tokio::test]
+async fn acme_chunk_with_more_shared_terms_ranks_first() {
+    let Some(idx) = live_index().await else {
+        return;
+    };
+    let _ = idx.replace_chunks(ACME, &[]).await;
+    let _ = idx.replace_chunks(NORTHWIND, &[]).await;
+
+    idx.replace_chunks(
+        ACME,
+        &[
+            ChunkWrite {
+                document_id: ACME_DOC.into(),
+                chunk_index: 0,
+                title: "Acme Q3 forecast".into(),
+                body: "Plant A mentions adhesives in passing.".into(),
+            },
+            ChunkWrite {
+                document_id: ACME_DOC.into(),
+                chunk_index: 1,
+                title: "Acme Q3 forecast".into(),
+                body: "The confidential plan lists the SKU mix and adhesives together.".into(),
+            },
+        ],
+    )
+    .await
+    .expect("seed acme chunks");
+    idx.replace_chunks(
+        NORTHWIND,
+        &[ChunkWrite {
+            document_id: NORTH_DOC.into(),
+            chunk_index: 0,
+            title: "Northwind Q3 forecast".into(),
+            body: "Northwind warehouse lists the SKU mix and adhesives too.".into(),
+        }],
+    )
+    .await
+    .expect("seed northwind chunks");
+
+    let hits = idx.search(ACME, "adhesives sku mix", 10).await;
+    assert!(hits.len() >= 2, "expected both Acme chunks, got {hits:?}");
+    assert!(
+        hits[0].snippet.contains("SKU mix"),
+        "chunk with more shared terms should rank first, got {hits:?}"
+    );
+    assert!(hits[1].snippet.contains("in passing"));
+    assert!(hits.iter().all(|h| h.tenant_id == ACME));
+    assert!(hits
+        .iter()
+        .all(|h| !h.snippet.to_lowercase().contains("northwind")));
+
+    idx.replace_chunks(ACME, &[])
+        .await
+        .expect("clear acme chunks");
+    idx.replace_chunks(NORTHWIND, &[])
+        .await
+        .expect("clear northwind chunks");
+}

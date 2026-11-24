@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use tracing::Instrument;
@@ -123,8 +125,11 @@ impl SearchIndex {
         Ok(rows_to_hits(rows))
     }
 
-    /// Chunk rows when this tenant has any. Documents when the chunk table
-    /// is missing or this tenant has none. SQL does not filter `tenant_id`.
+    /// Chunk rows when this tenant has any. Rank those rows by how many
+    /// distinct query tokens appear in the title or body, then by
+    /// chunk_index. A row that shares none is left out. Documents keep
+    /// substring search when the chunk table is missing or this tenant has
+    /// no chunks. SQL does not filter `tenant_id`.
     async fn search_pg_prefer_chunks(
         &self,
         tenant_id: &str,
@@ -144,8 +149,6 @@ impl SearchIndex {
             .bind(tenant_id)
             .execute(&mut *tx)
             .await?;
-        let pattern = like_contains(q);
-        let limit = i64::try_from(top_k.clamp(1, 20)).unwrap_or(5);
         let chunks_ready: bool = sqlx::query_scalar(
             "SELECT to_regclass('public.document_chunks') IS NOT NULL",
         )
@@ -157,21 +160,18 @@ impl SearchIndex {
                 .await?;
             if n > 0 {
                 let rows = sqlx::query(
-                    r#"SELECT document_id::text, tenant_id::text, title, body
+                    r#"SELECT document_id::text, tenant_id::text, title, body, chunk_index
                        FROM document_chunks
-                       WHERE title ILIKE $1 ESCAPE '\'
-                          OR body ILIKE $1 ESCAPE '\'
-                       ORDER BY chunk_index, document_id
-                       LIMIT $2"#,
+                       ORDER BY chunk_index, document_id"#,
                 )
-                .bind(&pattern)
-                .bind(limit)
                 .fetch_all(&mut *tx)
                 .await?;
                 tx.commit().await?;
-                return Ok(rows_to_hits(rows));
+                return Ok(rank_chunks_by_overlap(rows, q, top_k));
             }
         }
+        let pattern = like_contains(q);
+        let limit = i64::try_from(top_k.clamp(1, 20)).unwrap_or(5);
         let rows = sqlx::query(
             r#"SELECT id::text, tenant_id::text, title, body
                FROM documents
@@ -258,6 +258,114 @@ fn rows_to_hits(rows: Vec<sqlx::postgres::PgRow>) -> Vec<Hit> {
             tenant_id: r.get(1),
         })
         .collect()
+}
+
+fn terms(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut cur = String::new();
+    for ch in text.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            for lower in ch.to_lowercase() {
+                cur.push(lower);
+            }
+        } else if !cur.is_empty() {
+            out.insert(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.insert(cur);
+    }
+    out
+}
+
+fn rank_chunks_by_overlap(rows: Vec<sqlx::postgres::PgRow>, query: &str, top_k: usize) -> Vec<Hit> {
+    let chunks = rows
+        .into_iter()
+        .map(|row| {
+            let chunk_index: i32 = row.get(4);
+            let hit = Hit {
+                document_id: row.get(0),
+                tenant_id: row.get(1),
+                title: row.get(2),
+                snippet: row.get(3),
+            };
+            (chunk_index, hit)
+        })
+        .collect();
+    rank_chunk_hits(chunks, query, top_k)
+}
+
+fn rank_chunk_hits(chunks: Vec<(i32, Hit)>, query: &str, top_k: usize) -> Vec<Hit> {
+    let query_terms = terms(query);
+    let mut scored: Vec<(usize, i32, Hit)> = Vec::new();
+    for (chunk_index, hit) in chunks {
+        let passage = format!("{} {}", hit.title, hit.snippet);
+        let score = query_terms.intersection(&terms(&passage)).count();
+        if score == 0 {
+            continue;
+        }
+        scored.push((score, chunk_index, hit));
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let k = top_k.clamp(1, 20);
+    scored.into_iter().take(k).map(|(_, _, hit)| hit).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn acme_chunk(index: i32, body: &str) -> (i32, Hit) {
+        (
+            index,
+            Hit {
+                document_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1".into(),
+                title: "Acme Q3 forecast".into(),
+                snippet: body.into(),
+                tenant_id: "11111111-1111-1111-1111-111111111111".into(),
+            },
+        )
+    }
+
+    #[test]
+    fn more_shared_terms_rank_ahead_of_an_earlier_chunk() {
+        let hits = rank_chunk_hits(
+            vec![
+                acme_chunk(0, "Plant A mentions adhesives in passing."),
+                acme_chunk(
+                    1,
+                    "The confidential plan lists the SKU mix and adhesives together.",
+                ),
+                acme_chunk(2, "Tea export volume declined."),
+            ],
+            "adhesives sku mix",
+            10,
+        );
+        assert_eq!(hits.len(), 2);
+        assert!(hits[0].snippet.contains("SKU mix"));
+        assert!(hits[1].snippet.contains("in passing"));
+        assert!(hits
+            .iter()
+            .all(|h| h.document_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"));
+        assert!(hits
+            .iter()
+            .all(|h| !h.snippet.to_lowercase().contains("tea")));
+    }
+
+    #[test]
+    fn repeated_query_words_tie_on_chunk_index() {
+        let hits = rank_chunk_hits(
+            vec![
+                acme_chunk(2, "adhesives adhesives adhesives"),
+                acme_chunk(0, "Earlier adhesives note."),
+            ],
+            "adhesives adhesives",
+            10,
+        );
+        assert_eq!(hits.len(), 2);
+        assert!(hits[0].snippet.contains("Earlier"));
+        assert!(hits[1].snippet.contains("adhesives adhesives adhesives"));
+    }
 }
 
 fn like_contains(q: &str) -> String {
